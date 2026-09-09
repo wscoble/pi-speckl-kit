@@ -1,4 +1,10 @@
-# Skill: speckl-extension - spec-first pi extension development
+---
+name: speckl-extension
+description: Spec-first development workflow for pi extensions. Use when building or rewriting a pi extension: freeze the runtime contract, author a speckl .speckdl behavior contract, turn constraints into executable tests (mock-host contract tests, differential parity, hostile-input negatives), prove regression failing-first, gate with live-boot smokes, and route cutover through human sign-off.
+license: MIT
+---
+
+# speckl-extension - spec-first pi extension development
 
 Write the behavior contract BEFORE the code. The speckl spec is the source of
 truth; the extension implements it; tests are the spec's constraints made
