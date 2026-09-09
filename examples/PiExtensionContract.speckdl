@@ -1,0 +1,153 @@
+// PiExtensionContract.speckdl - generic behavior contract for pi tool
+// extensions. This is the worked example shipped with the kit: the contract
+// every tool result must satisfy so the renderer can never crash.
+//
+// It encodes pi 0.85.1's published runtime contract (AgentToolResult /
+// ToolDefinition) as enforceable constraints. Adapt the tool names and
+// domain actions to your extension; keep the shape and error-semantics
+// constraints verbatim - they encode the no-crash rule.
+
+speck PiExtensionContract {
+
+  bom {
+    compiler: "speckl" version "0.3.1"
+    runtime: "node-runtime" version ">=22.18"
+    license: "MIT"
+  }
+
+  // ── Types: mirrors of pi's published runtime contract ────────────────
+
+  // One content block. The wire field in pi's AgentToolResult is literally
+  // `type` (TextContent.type), values exactly "text" | "image"; the
+  // renderer filters content on c.type, so the field must be exact.
+  type ContentBlock = {
+    blockId: String,          // "<toolCallId>:<n>" - position in the content array
+    resultId: String,         // owning tool result
+    blockIndex: Nat,          // 0-based position; < blockCount
+    blockType: String,        // pi wire name: `type`; "text" | "image"
+    text: String,             // payload when blockType == "text"
+    mimeType: String          // "" for text blocks; image MIME type otherwise
+  }
+
+  // ToolResult: the spec mirror of AgentToolResult<T>. There is NO isError
+  // field - pi signals errors through the text payload ("error: ...").
+  type ToolResult = {
+    resultId: String,         // pi toolCallId
+    toolName: String,
+    outcome: String,          // "ok" | "error" - the only two terminal states (no crash state)
+    firstBlockText: String,   // content[0].text; "error: <reason>" when outcome == "error"
+    errorText: String,        // "" when outcome == "ok"
+    details: String,          // "" models pi's `details: undefined`
+    blockCount: Nat,          // length of the content array; always >= 1
+    containsSecret: Bool      // false always - key values never appear in output
+  }
+
+  type ToolDefinition = {
+    extensionId: String,
+    name: String,             // LLM tool name
+    label: String,            // human-readable label - REQUIRED by pi's UI contract
+    description: String,
+    registeredVia: String,    // "registerTool" | "registerCommand"
+    hostHadRegisterTool: Bool // host capability snapshot at registration time
+  }
+
+  // ── State ────────────────────────────────────────────────────────────
+  state: {
+    tools: Map<String, ToolDefinition>,
+    results: Map<String, ToolResult>,
+    blocks: Map<String, ContentBlock>   // keyed by blockId
+  }
+
+  // ── Actions ──────────────────────────────────────────────────────────
+
+  // Registration: registerTool preferred; registerCommand fallback (dash-
+  // form names, k=v args, JSON.parse of string params) only on hosts
+  // without pi.registerTool.
+  action RegisterTool(extensionId: String, name: String, label: String, description: String, registeredVia: String, hostHadRegisterTool: Bool) {
+    require extensionId != ""
+    require length(name) >= 1 && length(label) >= 1 && length(description) >= 1
+    require registeredVia == "registerTool" || registeredVia == "registerCommand"
+    require registeredVia != "registerTool" || hostHadRegisterTool
+    require registeredVia != "registerCommand" || !hostHadRegisterTool
+    require not tools.has(name)
+    tools[name] := ToolDefinition {
+      extensionId: extensionId, name: name, label: label,
+      description: description, registeredVia: registeredVia,
+      hostHadRegisterTool: hostHadRegisterTool
+    }
+  }
+
+  // Execution: every terminal state is a well-formed result - success or
+  // error - and errors are text content, never a thrown exception.
+  action Execute(resultId: String, toolName: String, outcome: String, errorText: String, outputText: String) {
+    require tools.has(toolName)
+    require not results.has(resultId)
+    require outcome == "ok" || outcome == "error"
+    require outcome != "error" || length(errorText) >= 1
+    require outcome != "ok" || errorText == ""
+    require outcome != "ok" || length(outputText) >= 1
+    results[resultId] := ToolResult {
+      resultId: resultId, toolName: toolName, outcome: outcome,
+      firstBlockText: outputText, errorText: errorText,
+      details: "", blockCount: 1,
+      containsSecret: false
+    }
+    blocks[resultId + ":0"] := ContentBlock {
+      blockId: resultId + ":0", resultId: resultId, blockIndex: 0,
+      blockType: "text", text: outputText, mimeType: ""
+    }
+  }
+
+  // ── Constraints: the no-crash rule, made enforceable ─────────────────
+
+  // The renderer (getTextOutput) filters result.content - a result missing
+  // `content` crashes pi session-fatally (the original incident). So:
+  // content is ALWAYS an array with at least one typed block.
+  constraint "every result has a renderable content array" {
+    forall r in results.values():
+      r.blockCount >= 1 && blocks.has(r.resultId + ":0")
+  }
+
+  constraint "every content element is a typed block" {
+    forall b in blocks.values():
+      b.blockType == "text" || b.blockType == "image"
+  }
+
+  // Block-array integrity: no phantom counts, no dropped blocks.
+  constraint "block indices are in range for their owning result" {
+    forall b in blocks.values():
+      implies(results.has(b.resultId), b.blockIndex < results[b.resultId].blockCount)
+  }
+
+  // A result's first block is its firstBlockText.
+  constraint "first block matches firstBlockText" {
+    forall r in results.values():
+      blocks[r.resultId + ":0"].text == r.firstBlockText
+  }
+
+  // Errors are signaled as prefixed text content - never a throw.
+  constraint "errors are error-prefixed text content" {
+    forall r in results.values():
+      implies(r.outcome == "error", hasErrorPrefix(r.errorText))
+  }
+
+  // label is required on both registration paths.
+  constraint "every registered tool has a label" {
+    forall t in tools.values():
+      length(t.label) >= 1 && length(t.name) >= 1
+  }
+
+  // registerTool is the preferred path; the fallback proves the host
+  // lacked it.
+  constraint "registration mode matches host capability" {
+    forall t in tools.values():
+      (t.registeredVia == "registerTool" implies t.hostHadRegisterTool) &&
+      (t.registeredVia == "registerCommand" implies not t.hostHadRegisterTool)
+  }
+
+  // Secret values never appear in any tool output.
+  constraint "no secret values in tool output" {
+    forall r in results.values():
+      r.containsSecret == false
+  }
+}

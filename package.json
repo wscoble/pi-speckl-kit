@@ -1,0 +1,17 @@
+{
+  "name": "@wscoble/pi-speckl-kit",
+  "version": "0.1.0",
+  "description": "Spec-first development kit for pi extensions: author .speckdl behavior contracts with speckl, compile them into constraints, and gate rewrites with executable DoD (mock suites, differential parity, live-boot smokes).",
+  "type": "module",
+  "keywords": ["pi-package", "pi", "speckl", "specification", "formal-methods", "extension-development"],
+  "license": "MIT",
+  "author": "Scott Scoble <wscoble>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wscoble/pi-speckl-kit.git"
+  },
+  "files": ["skills", "examples", "templates", "README.md", "LICENSE"],
+  "pi": {
+    "skills": ["./skills"]
+  }
+}
